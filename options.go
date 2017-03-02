@@ -23,7 +23,7 @@ type withDefaults struct {
 }
 
 func (opt *withDefaults) Apply(k *Kafka) error {
-	if err := WithCreds("127.0.0.1", "9092").Apply(k); err != nil {
+	if err := WithCreds("172.20.16.233", "9092").Apply(k); err != nil {
 		return err
 	}
 

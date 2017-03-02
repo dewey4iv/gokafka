@@ -84,8 +84,12 @@ func (k *Kafka) Start() error {
 						select {
 						case <-k.writeSig:
 							// log.Printf("::: Attempting Offset Write :::")
-							if err := k.offsetWriter.WriteOffset(rm.Topic, rm.Partition, rm.Offset); err != nil {
-								log.Printf("Error writing to offest writer: %s", err.Error())
+							if rm != nil {
+								if err := k.offsetWriter.WriteOffset(rm.Topic, rm.Partition, rm.Offset); err != nil {
+									log.Printf("Error writing to offest writer: %s", err.Error())
+								}
+
+								rm = nil
 							}
 						case message := <-input.Messages():
 							rm = message
