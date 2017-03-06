@@ -1,6 +1,7 @@
 package gokafka
 
 import (
+	"io/ioutil"
 	"log"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,11 @@ func New(opts ...Option) (*Kafka, error) {
 		if err := opt.Apply(&k); err != nil {
 			return nil, err
 		}
+	}
+
+	if k.logger == nil {
+		k.logger = logrus.New()
+		k.logger.Out = ioutil.Discard
 	}
 
 	go k.timer()
@@ -47,77 +53,92 @@ type runOpts struct {
 
 // Start starts the connections to a kafka instance
 func (k *Kafka) Start() error {
+	k.logger.Info("requesting topics")
 	topics, err := k.consumer.Topics()
 	if err != nil {
+		k.logger.WithError(err).Error("error getting topics")
 		return err
 	}
+	k.logger.WithField("topics", topics).Info("got topics")
 
 	// loop over all topics
 	for _, topic := range topics {
 
 		// check if there's a registered func for the topic
+		topicEntry := k.logger.WithField("topic", topic)
+		topicEntry.Info("handling Topic")
 		if fn, ok := k.funcs[topic]; ok {
+			topicEntry.Info("topic is registered")
 
 			// get partitions
+			topicEntry.Info("fetching partitions")
 			partitions, err := k.consumer.Partitions(topic)
 			if err != nil {
+				topicEntry.WithError(err).Error("error getting partitions")
 				return err
 			}
 
 			// start listener for each partition
-			for _, partition := range partitions {
 
+			for _, partition := range partitions {
+				partitionEntry := topicEntry.WithField("partition", partition)
+
+				partitionEntry.Info("fetching offset")
 				// get the last offset or the newset record
 				offset, err := k.offsetWriter.ReadOffset(topic, partition)
 				if err != nil {
 					offset = k.options.defaultOffset
 				}
 
+				partitionEntry.WithField("offset", offset).Info("request consumption")
 				// setup input stream from kafka
 				input, err := k.consumer.ConsumePartition(topic, partition, offset)
 				if err != nil {
+					partitionEntry.WithError(err).Error("unable to consume")
 					return err
 				}
 
-				log.Printf("Starting %s - %d @ offset %d", topic, partition, offset)
+				partitionEntry.WithField("offset", offset).Info("starting consumer")
 
 				k.totalConsumers++
-				go func(input sarama.PartitionConsumer, fn func(*sarama.ConsumerMessage) error) {
+				go func(l *logrus.Entry, input sarama.PartitionConsumer, fn func(*sarama.ConsumerMessage) error) {
 					var rm *sarama.ConsumerMessage
 
 					for {
 						select {
 						case <-k.writeSig:
-							// log.Printf("::: Attempting Offset Write :::")
 							if rm != nil {
+								l.WithField("offset", rm.Offset).Info("attempting offset write")
 								if err := k.offsetWriter.WriteOffset(rm.Topic, rm.Partition, rm.Offset); err != nil {
 									log.Printf("Error writing to offest writer: %s", err.Error())
 								}
 
 								rm = nil
+							} else {
+								l.Info("no new offset")
 							}
 						case message := <-input.Messages():
+							l.WithField("offset", message.Offset).Info("got message")
 							rm = message
 
 							if err := fn(message); err != nil {
-								log.Printf("Error writing message: %s", err.Error())
+								l.WithError(err).WithField("message", string(message.Value)).Error("unable to handle event")
 							}
 						case err := <-input.Errors():
 							// TODO: this should be handled better -- but this is just a demo, so we just log the error.
-							log.Println(err)
+							l.WithError(err).Error("got error from kafka")
 						case <-k.quitCh:
+							l.Info("quitting")
 							atomic.AddInt64(&k.totalConsumers, -1)
 
 							if err := input.Close(); err != nil {
 								// TODO: handle this later
-								// c.errCh <- err
+								l.WithError(err).Error("error closing kafka connection")
 							}
 						}
 					}
-				}(input, fn)
+				}(partitionEntry, input, fn)
 			}
-		} else {
-			// log.Printf("no func provided for topic: %s", topic)
 		}
 	}
 
@@ -126,6 +147,7 @@ func (k *Kafka) Start() error {
 
 // Stop gracefully stops the kafka subscriptions
 func (k *Kafka) Stop() error {
+	k.logger.Info("stopping kafka")
 	k.quitCh <- struct{}{}
 
 	return nil
@@ -140,6 +162,7 @@ func (k *Kafka) timer() {
 	for {
 		select {
 		case <-ticker.C:
+			k.logger.Info("broadcasting write offsets")
 			for i := 0; i < int(k.totalConsumers); i++ {
 				k.writeSig <- struct{}{}
 			}
