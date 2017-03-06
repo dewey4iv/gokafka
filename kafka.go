@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
+	"github.com/Sirupsen/logrus"
 )
 
 // New takes a set of options and returns a new kafka instance or an error
@@ -29,6 +30,7 @@ func New(opts ...Option) (*Kafka, error) {
 
 // Kafka is a wrapper around a sarama.Consumer
 type Kafka struct {
+	options        runOpts
 	consumer       sarama.Consumer
 	writeSig       chan struct{}
 	funcs          map[string]func(*sarama.ConsumerMessage) error
@@ -36,6 +38,11 @@ type Kafka struct {
 	stream         chan *sarama.ConsumerMessage
 	totalConsumers int64
 	quitCh         chan struct{}
+	logger         *logrus.Logger
+}
+
+type runOpts struct {
+	defaultOffset int64
 }
 
 // Start starts the connections to a kafka instance
@@ -63,9 +70,7 @@ func (k *Kafka) Start() error {
 				// get the last offset or the newset record
 				offset, err := k.offsetWriter.ReadOffset(topic, partition)
 				if err != nil {
-					offset = sarama.OffsetNewest
-					// we could also choose to use oldest
-					// offset = sarama.OffsetOldest
+					offset = k.options.defaultOffset
 				}
 
 				// setup input stream from kafka

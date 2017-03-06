@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/dewey4iv/gokafka/offset-handlers/csv"
 
 	"github.com/Shopify/sarama"
@@ -12,6 +13,41 @@ import (
 // Option applies a config to the provided Kafka
 type Option interface {
 	Apply(*Kafka) error
+}
+
+// WithDefaultOffset applies a default offset if one isn't found.
+// Usually you want to use -1 (newest) or -2 (oldest)
+func WithDefaultOffset(offset int64) Option {
+	return &withDefaultOffset{offset}
+}
+
+type withDefaultOffset struct {
+	offset int64
+}
+
+func (opt *withDefaultOffset) Apply(k *Kafka) error {
+	k.options.defaultOffset = opt.offset
+
+	return nil
+}
+
+// WithLogger sets the logrus.Logger instance
+func WithLogger(logger *logrus.Logger) Option {
+	return &withLogger{logger}
+}
+
+type withLogger struct {
+	logger *logrus.Logger
+}
+
+func (opt *withLogger) Apply(k *Kafka) error {
+	if opt.logger == nil {
+		return fmt.Errorf("no logger instance provided")
+	}
+
+	k.logger = opt.logger
+
+	return nil
 }
 
 // WithDefaults sets some sensible defaults
